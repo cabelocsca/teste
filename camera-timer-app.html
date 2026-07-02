@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Câmera Temporizada</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0d11;
+    --panel:#12161d;
+    --panel-glass:rgba(18,22,29,0.72);
+    --line:rgba(255,255,255,0.08);
+    --text:#e9ecef;
+    --muted:#7b8492;
+    --amber:#ffb454;
+    --amber-glow:rgba(255,180,84,0.55);
+    --cyan:#5eead4;
+    --danger:#ff6b6b;
+    --radius:16px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    overflow:hidden;
+    overscroll-behavior:none;
+  }
+  #app{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+  }
+
+  /* ---------- Camera viewfinder ---------- */
+  #viewfinder{
+    position:absolute; inset:0;
+    background:#000;
+  }
+  #video{
+    width:100%; height:100%;
+    object-fit:cover;
+    display:block;
+    filter:saturate(1.05) contrast(1.02);
+  }
+  #canvas{ display:none; }
+
+  #scrim-top{
+    position:absolute; top:0; left:0; right:0; height:22%;
+    background:linear-gradient(to bottom, rgba(0,0,0,0.55), rgba(0,0,0,0));
+    pointer-events:none;
+  }
+  #scrim-bottom{
+    position:absolute; bottom:0; left:0; right:0; height:48%;
+    background:linear-gradient(to top, rgba(6,8,11,0.92), rgba(6,8,11,0));
+    pointer-events:none;
+  }
+
+  /* ---------- Watermark credit text ---------- */
+  #watermark{
+    position:absolute; left:50%; top:50%;
+    transform:translate(-50%,-50%);
+    text-align:center;
+    pointer-events:none;
+    z-index:3;
+    opacity:0.34;
+    user-select:none;
+  }
+  #watermark .line1{
+    font-family:'Space Mono',monospace;
+    font-weight:700;
+    letter-spacing:0.04em;
+    font-size:clamp(0.85rem, 3.6vw, 1.15rem);
+    color:#fff;
+  }
+  #watermark .line2{
+    font-family:'Space Mono',monospace;
+    font-weight:400;
+    letter-spacing:0.12em;
+    font-size:clamp(0.62rem, 2.6vw, 0.8rem);
+    color:var(--amber);
+    margin-top:6px;
+  }
+
+  /* ---------- Digital clock, top-right, discreet ---------- */
+  #clock{
+    position:absolute; top:calc(10px + env(safe-area-inset-top)); right:calc(10px + env(safe-area-inset-right));
+    z-index:5;
+    font-family:'Space Mono',monospace;
+    font-size:clamp(0.68rem, 2.2vw, 0.92rem);
+    letter-spacing:0.06em;
+    color:rgba(233,236,239,0.65);
+    background:rgba(10,13,17,0.38);
+    border:1px solid rgba(255,255,255,0.08);
+    padding:5px 10px;
+    border-radius:999px;
+    backdrop-filter:blur(6px);
+    display:flex; align-items:center; gap:6px;
+  }
+  #clock .dot{
+    width:6px; height:6px; border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 6px var(--cyan);
+    flex:none;
+  }
+  #clock.night .dot{ background:var(--amber); box-shadow:0 0 6px var(--amber);}
+
+  /* ---------- Flash indicator pulse over screen ---------- */
+  #flash-pulse{
+    position:absolute; inset:0; background:#fff;
+    opacity:0; pointer-events:none; z-index:20;
+    transition:opacity 120ms ease-out;
+  }
+
+  /* ---------- Low-light / torch badge ---------- */
+  #torch-badge{
+    position:absolute; top:calc(10px + env(safe-area-inset-top)); left:calc(10px + env(safe-area-inset-left));
+    z-index:5;
+    font-family:'Space Mono',monospace;
+    font-size:clamp(0.6rem, 2vw, 0.75rem);
+    color:var(--amber);
+    background:rgba(10,13,17,0.38);
+    border:1px solid rgba(255,180,84,0.35);
+    padding:5px 10px; border-radius:999px;
+    backdrop-filter:blur(6px);
+    display:none;
+    align-items:center; gap:6px;
+    box-shadow:0 0 14px rgba(255,180,84,0.15);
+  }
+  #torch-badge.on{ display:flex; }
+  #torch-badge svg{ width:12px; height:12px; }
+
+  /* ---------- Control panel (bottom) ---------- */
+  #panel{
+    position:relative; z-index:6;
+    margin-top:auto;
+    padding:14px 16px calc(16px + env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; gap:12px;
+  }
+  #status-row{
+    display:flex; align-items:center; justify-content:center;
+    gap:8px;
+    font-family:'Space Mono',monospace;
+    font-size:clamp(0.62rem,2vw,0.75rem);
+    color:var(--muted);
+  }
+  #folder-btn{
+    background:transparent; border:1px solid var(--line); color:var(--muted);
+    padding:4px 10px; border-radius:999px; font-family:'Inter',sans-serif;
+    font-size:clamp(0.65rem,2vw,0.78rem); cursor:pointer;
+  }
+  #folder-btn.chosen{ color:var(--cyan); border-color:rgba(94,234,212,0.4); }
+
+  #time-menu{
+    display:flex;
+    gap:10px;
+    background:var(--panel-glass);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:10px;
+    backdrop-filter:blur(14px);
+  }
+  .time-col{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:4px;
+  }
+  .time-col label{
+    font-size:clamp(0.6rem, 1.8vw, 0.72rem);
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .time-col select{
+    width:100%;
+    appearance:none; -webkit-appearance:none;
+    background:rgba(255,255,255,0.04);
+    border:1px solid var(--line);
+    color:var(--text);
+    font-family:'Space Mono',monospace;
+    font-weight:700;
+    font-size:clamp(1.1rem, 5vw, 1.6rem);
+    text-align:center;
+    padding:10px 4px;
+    border-radius:12px;
+    outline:none;
+  }
+  .time-col select:focus{ border-color:var(--cyan); }
+
+  #start-btn{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    background:linear-gradient(180deg, #ffc774, var(--amber));
+    color:#241505;
+    border:none;
+    border-radius:var(--radius);
+    padding:16px;
+    font-family:'Space Mono',monospace;
+    font-weight:700;
+    font-size:clamp(1rem, 4.4vw, 1.25rem);
+    letter-spacing:0.08em;
+    cursor:pointer;
+    box-shadow:0 6px 24px rgba(255,180,84,0.28);
+    transition:transform 80ms ease, box-shadow 150ms ease;
+  }
+  #start-btn:active{ transform:scale(0.98); }
+  #start-btn.counting{
+    background:linear-gradient(180deg, #303945, #1c222a);
+    color:var(--cyan);
+    box-shadow:0 6px 24px rgba(94,234,212,0.12);
+  }
+  #start-btn .star{ font-size:1.1em; line-height:1; }
+
+  #hint{
+    text-align:center;
+    font-size:clamp(0.62rem,1.9vw,0.74rem);
+    color:var(--muted);
+    min-height:1.2em;
+  }
+
+  /* ---------- Landscape adaptation ---------- */
+  @media (orientation:landscape){
+    #panel{
+      flex-direction:row;
+      align-items:center;
+      gap:14px;
+      padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+    }
+    #status-row{ display:none; }
+    #time-menu{ flex:2; padding:8px; }
+    #start-btn{ flex:1; padding:14px 10px; min-width:140px; }
+    #hint{ display:none; }
+    .time-col select{ padding:8px 4px; font-size:clamp(1rem, 3.4vw, 1.3rem); }
+  }
+
+  #permission-screen{
+    position:absolute; inset:0; z-index:30;
+    background:var(--bg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; padding:32px; text-align:center;
+  }
+  #permission-screen h1{
+    font-family:'Space Mono',monospace; font-size:clamp(1.1rem,5vw,1.5rem);
+    margin:0; color:var(--amber);
+  }
+  #permission-screen p{ color:var(--muted); font-size:0.9rem; max-width:340px; line-height:1.5; margin:0;}
+  #permission-screen button{
+    background:var(--amber); color:#241505; border:none;
+    padding:14px 28px; border-radius:999px; font-family:'Space Mono',monospace;
+    font-weight:700; font-size:1rem; cursor:pointer;
+  }
+  #permission-screen.hidden{ display:none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewfinder">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="scrim-top"></div>
+    <div id="scrim-bottom"></div>
+    <div id="watermark">
+      <div class="line1">Prompt : Ricardo da Cruz</div>
+      <div class="line2">Develop : CLAUDE</div>
+    </div>
+  </div>
+
+  <div id="clock"><span class="dot"></span><span id="clock-text">--:--:--</span></div>
+
+  <div id="torch-badge">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6z"/></svg>
+    <span>FLASH AUTO</span>
+  </div>
+
+  <div id="flash-pulse"></div>
+
+  <div id="panel">
+    <div id="status-row">
+      <span id="save-status">Salvando em: Downloads</span>
+      <button id="folder-btn" type="button">📁 Escolher Pictures</button>
+    </div>
+
+    <div id="time-menu">
+      <div class="time-col">
+        <label for="sel-days">Dias</label>
+        <select id="sel-days"></select>
+      </div>
+      <div class="time-col">
+        <label for="sel-hours">Horas</label>
+        <select id="sel-hours"></select>
+      </div>
+      <div class="time-col">
+        <label for="sel-min">Min</label>
+        <select id="sel-min"></select>
+      </div>
+    </div>
+
+    <button id="start-btn" type="button">
+      <span class="star">★</span><span id="start-label">INICIAR</span>
+    </button>
+    <div id="hint">Toque em Iniciar para capturar após o tempo definido</div>
+  </div>
+
+  <div id="permission-screen">
+    <h1>Câmera Temporizada</h1>
+    <p>Este app precisa de acesso à câmera para funcionar. Toque abaixo para permitir. O flash é acionado automaticamente em ambientes escuros.</p>
+    <button id="grant-btn" type="button">Ativar câmera</button>
+    <p id="permission-error" style="color:var(--danger); font-size:0.8rem;"></p>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const clockText = document.getElementById('clock-text');
+  const clockEl = document.getElementById('clock');
+  const torchBadge = document.getElementById('torch-badge');
+  const flashPulse = document.getElementById('flash-pulse');
+  const startBtn = document.getElementById('start-btn');
+  const startLabel = document.getElementById('start-label');
+  const hint = document.getElementById('hint');
+  const folderBtn = document.getElementById('folder-btn');
+  const saveStatus = document.getElementById('save-status');
+  const permScreen = document.getElementById('permission-screen');
+  const grantBtn = document.getElementById('grant-btn');
+  const permError = document.getElementById('permission-error');
+
+  const selDays = document.getElementById('sel-days');
+  const selHours = document.getElementById('sel-hours');
+  const selMin = document.getElementById('sel-min');
+
+  let stream = null;
+  let videoTrack = null;
+  let torchSupported = false;
+  let torchOn = false;
+  let lowLightNow = false;
+  let dirHandle = null;
+  let countdownTimer = null;
+  let remainingSeconds = 0;
+  let counting = false;
+
+  // ---------- populate selects (all including zero) ----------
+  function fillSelect(sel, max){
+    for(let i=0;i<=max;i++){
+      const o = document.createElement('option');
+      o.value = i; o.textContent = i;
+      sel.appendChild(o);
+    }
+  }
+  fillSelect(selDays, 30);
+  fillSelect(selHours, 23);
+  fillSelect(selMin, 59);
+
+  // ---------- digital clock ----------
+  function pad(n){ return n.toString().padStart(2,'0'); }
+  function tickClock(){
+    const now = new Date();
+    clockText.textContent = pad(now.getHours())+':'+pad(now.getMinutes())+':'+pad(now.getSeconds());
+    const hr = now.getHours();
+    clockEl.classList.toggle('night', hr >= 19 || hr < 6);
+  }
+  setInterval(tickClock, 1000);
+  tickClock();
+
+  // ---------- IndexedDB: persist Pictures directory handle ----------
+  function idbOpen(){
+    return new Promise((resolve,reject)=>{
+      const req = indexedDB.open('camera-timer-db',1);
+      req.onupgradeneeded = ()=> req.result.createObjectStore('kv');
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
+    });
+  }
+  async function idbSet(key,val){
+    try{
+      const db = await idbOpen();
+      return new Promise((resolve,reject)=>{
+        const tx = db.transaction('kv','readwrite');
+        tx.objectStore('kv').put(val,key);
+        tx.oncomplete = ()=>resolve();
+        tx.onerror = ()=>reject(tx.error);
+      });
+    }catch(e){ /* ignore */ }
+  }
+  async function idbGet(key){
+    try{
+      const db = await idbOpen();
+      return new Promise((resolve,reject)=>{
+        const tx = db.transaction('kv','readonly');
+        const r = tx.objectStore('kv').get(key);
+        r.onsuccess = ()=>resolve(r.result || null);
+        r.onerror = ()=>reject(r.error);
+      });
+    }catch(e){ return null; }
+  }
+
+  async function restoreDirHandle(){
+    if(!('showDirectoryPicker' in window)) return;
+    const handle = await idbGet('picturesDir');
+    if(handle){
+      try{
+        const perm = await handle.queryPermission({mode:'readwrite'});
+        if(perm === 'granted'){
+          dirHandle = handle;
+          updateSaveStatus();
+        }
+      }catch(e){ /* handle stale */ }
+    }
+  }
+
+  function updateSaveStatus(){
+    if(dirHandle){
+      saveStatus.textContent = 'Salvando em: Pictures';
+      folderBtn.classList.add('chosen');
+      folderBtn.textContent = '📁 Pictures ✓';
+    } else {
+      saveStatus.textContent = 'Salvando em: Downloads';
+      folderBtn.classList.remove('chosen');
+      folderBtn.textContent = '📁 Escolher Pictures';
+    }
+  }
+
+  async function chooseFolder(){
+    if(!('showDirectoryPicker' in window)){
+      alert('Este navegador não permite escolher a pasta diretamente. As fotos serão baixadas para a pasta padrão de downloads do celular.');
+      return;
+    }
+    try{
+      const handle = await window.showDirectoryPicker({id:'camera-timer-pictures', startIn:'pictures'});
+      const perm = await handle.requestPermission({mode:'readwrite'});
+      if(perm === 'granted'){
+        dirHandle = handle;
+        await idbSet('picturesDir', handle);
+        updateSaveStatus();
+      }
+    }catch(e){ /* user cancelled */ }
+  }
+  folderBtn.addEventListener('click', chooseFolder);
+
+  // ---------- camera setup ----------
+  async function startCamera(){
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:{ ideal:'environment' }, width:{ideal:1920}, height:{ideal:1080} },
+        audio:false
+      });
+      video.srcObject = stream;
+      videoTrack = stream.getVideoTracks()[0];
+      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+      torchSupported = !!caps.torch;
+      permScreen.classList.add('hidden');
+      startLowLightMonitor();
+    }catch(err){
+      permError.textContent = 'Não foi possível acessar a câmera: ' + err.message +
+        '. Verifique se o site está em HTTPS e se a permissão de câmera foi concedida.';
+    }
+  }
+  grantBtn.addEventListener('click', startCamera);
+
+  // ---------- low-light detection ----------
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 24; sampleCanvas.height = 24;
+  const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently:true });
+
+  function sampleBrightness(){
+    if(!video.videoWidth) return null;
+    sampleCtx.drawImage(video, 0, 0, 24, 24);
+    const data = sampleCtx.getImageData(0,0,24,24).data;
+    let total = 0, count = 0;
+    for(let i=0;i<data.length;i+=4){
+      total += 0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2];
+      count++;
+    }
+    return total/count; // 0-255
+  }
+
+  async function setTorch(on){
+    if(!torchSupported || !videoTrack) return;
+    try{
+      await videoTrack.applyConstraints({ advanced:[{ torch: on }] });
+      torchOn = on;
+      torchBadge.classList.toggle('on', on);
+    }catch(e){ /* device refused */ }
+  }
+
+  function startLowLightMonitor(){
+    setInterval(async ()=>{
+      const b = sampleBrightness();
+      if(b === null) return;
+      const wasLow = lowLightNow;
+      lowLightNow = b < 60;
+      if(lowLightNow !== wasLow){
+        if(torchSupported){
+          await setTorch(lowLightNow);
+        } else {
+          torchBadge.classList.toggle('on', lowLightNow);
+        }
+      }
+    }, 1200);
+  }
+
+  // ---------- capture & save ----------
+  function fileName(){
+    const d = new Date();
+    return 'foto_' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '_' +
+      pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.jpg';
+  }
+
+  async function saveBlob(blob){
+    const name = fileName();
+    if(dirHandle){
+      try{
+        const perm = await dirHandle.queryPermission({mode:'readwrite'});
+        if(perm !== 'granted'){
+          const req = await dirHandle.requestPermission({mode:'readwrite'});
+          if(req !== 'granted') throw new Error('sem permissão');
+        }
+        const fh = await dirHandle.getFileHandle(name, { create:true });
+        const writable = await fh.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      }catch(e){
+        // fall through to download
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  }
+
+  async function capturePhoto(){
+    if(!video.videoWidth) return;
+
+    // If currently dark and torch not already engaged, force it on briefly for the shot
+    const forcedTorch = lowLightNow && torchSupported && !torchOn;
+    if(forcedTorch) await setTorch(true);
+
+    // visual flash feedback (also compensates when hardware torch is unavailable)
+    flashPulse.style.opacity = '0.9';
+    await new Promise(r=>setTimeout(r, 90));
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    flashPulse.style.opacity = '0';
+
+    if(forcedTorch) await setTorch(lowLightNow ? true : false);
+
+    canvas.toBlob(async (blob)=>{
+      if(blob) await saveBlob(blob);
+    }, 'image/jpeg', 0.92);
+  }
+
+  // ---------- countdown / start ----------
+  function totalSeconds(){
+    return (parseInt(selDays.value,10)||0)*86400 +
+           (parseInt(selHours.value,10)||0)*3600 +
+           (parseInt(selMin.value,10)||0)*60;
+  }
+
+  function formatRemaining(s){
+    const d = Math.floor(s/86400); s -= d*86400;
+    const h = Math.floor(s/3600); s -= h*3600;
+    const m = Math.floor(s/60); s -= m*60;
+    return d+'d '+pad(h)+':'+pad(m)+':'+pad(s);
+  }
+
+  function setControlsEnabled(enabled){
+    [selDays, selHours, selMin].forEach(s => s.disabled = !enabled);
+  }
+
+  function startCountdown(){
+    const secs = totalSeconds();
+    if(secs === 0){
+      capturePhoto();
+      return;
+    }
+    remainingSeconds = secs;
+    counting = true;
+    setControlsEnabled(false);
+    startBtn.classList.add('counting');
+    hint.textContent = 'Toque novamente para cancelar';
+    updateCountdownLabel();
+    countdownTimer = setInterval(()=>{
+      remainingSeconds--;
+      if(remainingSeconds <= 0){
+        clearInterval(countdownTimer);
+        stopCountdown(false);
+        capturePhoto();
+      } else {
+        updateCountdownLabel();
+      }
+    }, 1000);
+  }
+
+  function updateCountdownLabel(){
+    startLabel.textContent = formatRemaining(remainingSeconds);
+  }
+
+  function stopCountdown(userCancelled){
+    clearInterval(countdownTimer);
+    counting = false;
+    setControlsEnabled(true);
+    startBtn.classList.remove('counting');
+    startLabel.textContent = 'INICIAR';
+    hint.textContent = 'Toque em Iniciar para capturar após o tempo definido';
+  }
+
+  startBtn.addEventListener('click', ()=>{
+    if(counting){ stopCountdown(true); }
+    else { startCountdown(); }
+  });
+
+  // ---------- init ----------
+  restoreDirHandle();
+  updateSaveStatus();
+
+  if(!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia){
+    permError.textContent = 'Este navegador não suporta acesso à câmera, ou a página não está em um contexto seguro (HTTPS/localhost).';
+  }
+})();
+</script>
+</body>
+</html>
